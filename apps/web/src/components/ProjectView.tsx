@@ -234,8 +234,8 @@ import {
   workspaceIdentityCanBillAmr,
 } from '../collab/useWorkspaceContext';
 import {
-  projectWorkspaceContext,
   projectWorkspaceScopeAuthorizesAmr,
+  runWorkspaceIdentity,
   useProjectWorkspaceScope,
 } from '../collab/useProjectWorkspaceScope';
 import { CollabProvider, type CollabContextValue } from '../collab/collab-context';
@@ -1542,8 +1542,14 @@ export function ProjectView({
   const workspaceContextState = useWorkspaceContext();
   const { context: workspaceContext } = workspaceContextState;
   const projectWorkspaceScopeState = useProjectWorkspaceScope(project.id);
-  const projectRunWorkspaceContext = projectWorkspaceContext(
-    projectWorkspaceScopeState.scope,
+  // Falls back to the caller's own identity while the project's binding is
+  // still unread, so a Home auto-send is not refused 401
+  // WORKSPACE_CONTEXT_REQUIRED for having no identity to name. See
+  // `runWorkspaceIdentity` for which answered scope states deliberately keep
+  // asserting nothing.
+  const projectRunWorkspaceContext = runWorkspaceIdentity(
+    projectWorkspaceScopeState,
+    workspaceContext,
   );
   const projectRunRequiresWorkspaceScope =
     config.mode === 'daemon' && config.agentId === 'amr';
@@ -3869,7 +3875,12 @@ export function ProjectView({
   const removePreviewComment = useCallback(
     async (commentId: string) => {
       if (!activeConversationId) return;
-      const ok = await deletePreviewComment(project.id, activeConversationId, commentId);
+      const ok = await deletePreviewComment(
+        project.id,
+        activeConversationId,
+        commentId,
+        workspaceContext,
+      );
       if (!ok) return;
       setPreviewComments((current) => current.filter((comment) => comment.id !== commentId));
       setAttachedComments((current) => removeAttachedComment(current, commentId));
@@ -3940,7 +3951,13 @@ export function ProjectView({
       );
       await Promise.all(
         persistedAttachments.map((attachment) =>
-          patchPreviewCommentStatus(project.id, activeConversationId, attachment.id, status),
+          patchPreviewCommentStatus(
+            project.id,
+            activeConversationId,
+            attachment.id,
+            status,
+            workspaceContext,
+          ),
         ),
       );
       void refreshPreviewComments();
@@ -5285,7 +5302,13 @@ export function ProjectView({
         );
         void Promise.all(
           Array.from(reservedCommentIds, (commentId) =>
-            patchPreviewCommentStatus(project.id, input.conversationId, commentId, 'applying'),
+            patchPreviewCommentStatus(
+              project.id,
+              input.conversationId,
+              commentId,
+              'applying',
+              workspaceContext,
+            ),
           ),
         ).catch(() => {});
       }
@@ -6843,7 +6866,13 @@ export function ProjectView({
         );
         void Promise.all(
           stuckApplying.map((comment) =>
-            patchPreviewCommentStatus(project.id, comment.conversationId, comment.id, 'open'),
+            patchPreviewCommentStatus(
+              project.id,
+              comment.conversationId,
+              comment.id,
+              'open',
+              workspaceContext,
+            ),
           ),
         ).catch(() => {});
       }

@@ -3761,12 +3761,19 @@ describe('ProjectView daemon cleanup', () => {
     );
 
     await waitFor(() => {
-      expect(patchPreviewCommentStatus).toHaveBeenCalledWith(
-        'project-live-success-comments',
-        'conv-1',
-        'comment-1',
-        'needs_review',
-      );
+      // Matched on the leading four arguments: this call also carries a trailing
+      // workspace identity for the daemon's comment mutation gate.
+      expect(
+        patchPreviewCommentStatus.mock.calls.some((call) => {
+          const [projectId, conversationId, commentId, status] = call as [
+            string, string, string, string,
+          ];
+          return projectId === 'project-live-success-comments'
+            && conversationId === 'conv-1'
+            && commentId === 'comment-1'
+            && status === 'needs_review';
+        }),
+      ).toBe(true);
     });
   });
 

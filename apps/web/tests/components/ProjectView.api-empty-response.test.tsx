@@ -465,12 +465,19 @@ describe('ProjectView API empty response handling', () => {
     await sendTestPrompt();
 
     await waitFor(() => {
-      expect(mockedPatchPreviewCommentStatus).toHaveBeenCalledWith(
-        project.id,
-        'conv-project-1',
-        'comment-1',
-        'failed',
-      );
+      // Leading four arguments only: this call also carries a trailing workspace
+      // identity for the daemon's comment mutation gate.
+      expect(
+        mockedPatchPreviewCommentStatus.mock.calls.some((call) => {
+          const [projectId, conversationId, commentId, status] = call as unknown as [
+            string, string, string, string,
+          ];
+          return projectId === project.id
+            && conversationId === 'conv-project-1'
+            && commentId === 'comment-1'
+            && status === 'failed';
+        }),
+      ).toBe(true);
     });
     await waitFor(() => {
       expect(hasSavedAssistantMessage((message) => (

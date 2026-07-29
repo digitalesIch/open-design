@@ -2159,18 +2159,28 @@ export async function upsertPreviewComment(
   }
 }
 
+// Same `enforceCommentWorkspaceMutation` gate as `upsertPreviewComment` above
+// (apps/daemon/src/routes/project/comments.ts guards this route and DELETE, but
+// deliberately not `/anchor` or `/reorder`), so this write needs the same
+// `workspaceContext`. Without it a status change on a workspace-bound project is
+// judged as a headerless caller and fails closed with 401
+// WORKSPACE_CONTEXT_REQUIRED — silently, since the caller only sees `null`.
 export async function patchPreviewCommentStatus(
   projectId: string,
   conversationId: string,
   commentId: string,
   status: PreviewCommentStatus,
+  workspaceContext?: WorkspaceCollabContext | null,
 ): Promise<PreviewComment | null> {
   try {
     const resp = await fetch(
       `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/comments/${encodeURIComponent(commentId)}`,
       {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(workspaceContext ? workspaceProjectHeaders(workspaceContext) : {}),
+        },
         body: JSON.stringify({ status }),
       },
     );
@@ -2222,15 +2232,20 @@ export async function patchPreviewCommentSortKey(
   }
 }
 
+// Workspace-gated exactly like the status PATCH above — see that comment.
 export async function deletePreviewComment(
   projectId: string,
   conversationId: string,
   commentId: string,
+  workspaceContext?: WorkspaceCollabContext | null,
 ): Promise<boolean> {
   try {
     const resp = await fetch(
       `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/comments/${encodeURIComponent(commentId)}`,
-      { method: 'DELETE' },
+      {
+        method: 'DELETE',
+        ...(workspaceContext ? { headers: workspaceProjectHeaders(workspaceContext) } : {}),
+      },
     );
     return resp.ok;
   } catch {

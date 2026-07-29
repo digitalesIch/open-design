@@ -26,6 +26,31 @@ const fetchLiveArtifacts = vi.fn();
 const fetchSkill = vi.fn();
 const fetchDesignSystem = vi.fn();
 const patchPreviewCommentStatus = vi.fn();
+
+/**
+ * Whether a comment-status write happened, matched on the four arguments this
+ * file cares about. `patchPreviewCommentStatus` also takes a trailing workspace
+ * identity (so the daemon's `enforceCommentWorkspaceMutation` gate can tell a
+ * team member from a headerless caller), and a positional
+ * `toHaveBeenCalledWith` would both break on it and — worse — make every
+ * `not.toHaveBeenCalledWith` here pass vacuously. `null` matches any value in
+ * the corresponding position.
+ */
+function commentStatusWritten(
+  projectId: string | null,
+  conversationId: string | null,
+  commentId: string,
+  status: string,
+): boolean {
+  return patchPreviewCommentStatus.mock.calls.some((call) => {
+    const [callProject, callConversation, callComment, callStatus] = call as [
+      string, string, string, string,
+    ];
+    if (projectId !== null && callProject !== projectId) return false;
+    if (conversationId !== null && callConversation !== conversationId) return false;
+    return callComment === commentId && callStatus === status;
+  });
+}
 const getTemplate = vi.fn();
 const fetchChatRunStatus = vi.fn();
 const listActiveChatRuns = vi.fn();
@@ -113,6 +138,19 @@ vi.mock('../../src/collab/useProjectWorkspaceScope', () => ({
   projectWorkspaceScopeAuthorizesAmr: (
     scope: ProjectWorkspaceScopeState['scope'],
   ) => scope?.kind === 'personal' || scope?.kind === 'team',
+  // Mirrors the real `runWorkspaceIdentity`: the project's resolved scope wins,
+  // and the caller's own identity stands in ONLY while the first answer is still
+  // outstanding. Every answered or failed state stays headerless so the daemon
+  // judges it on its own state.
+  runWorkspaceIdentity: (
+    state: ProjectWorkspaceScopeState,
+    caller: WorkspaceCollabContext | null,
+  ) => {
+    const scope = state.scope;
+    if (scope?.kind === 'personal' || scope?.kind === 'team') return scope.context;
+    if (!state.loading || scope !== null || state.failure) return null;
+    return caller;
+  },
 }));
 
 vi.mock('../../src/providers/daemon', () => ({
@@ -1721,12 +1759,8 @@ describe('ProjectView conversation run isolation', () => {
       expect(screen.getByTestId('conversation-latest-runs').textContent).toContain('conv-a:running'),
     );
     await waitFor(() =>
-      expect(patchPreviewCommentStatus).toHaveBeenCalledWith(
-        'project-1',
-        'conv-a',
-        previewComment.id,
-        'applying',
-      ),
+      expect(commentStatusWritten('project-1', 'conv-a', previewComment.id, 'applying'))
+        .toBe(true),
     );
     patchPreviewCommentStatus.mockClear();
     fetchProjectFiles.mockClear();
@@ -1740,12 +1774,8 @@ describe('ProjectView conversation run isolation', () => {
     await waitFor(() => expect(screen.getByTestId('streaming-state').textContent).toBe('streaming'));
     expect(screen.getByTestId('workspace-streaming-state').textContent).toBe('streaming');
     expect(screen.getByTestId('conversation-latest-runs').textContent).toContain('conv-a:running');
-    expect(patchPreviewCommentStatus).not.toHaveBeenCalledWith(
-      'project-1',
-      'conv-a',
-      previewComment.id,
-      'needs_review',
-    );
+    expect(commentStatusWritten('project-1', 'conv-a', previewComment.id, 'needs_review'))
+      .toBe(false);
     expect(fetchProjectFiles).not.toHaveBeenCalled();
     expect(streamViaDaemon).toHaveBeenLastCalledWith(expect.objectContaining({
       conversationId: 'conv-a',
@@ -1968,12 +1998,7 @@ describe('ProjectView conversation run isolation', () => {
     await waitFor(() => expect(screen.getByTestId('attached-comment-count').textContent).toBe('1'));
     fireEvent.click(screen.getByTestId('send-message'));
     await waitFor(() =>
-      expect(patchPreviewCommentStatus).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        previewComment.id,
-        'applying',
-      ),
+      expect(commentStatusWritten(null, null, previewComment.id, 'applying')).toBe(true),
     );
     await waitFor(() => expect(screen.getByTestId('send-queued-0')).toBeTruthy());
 
@@ -1986,12 +2011,7 @@ describe('ProjectView conversation run isolation', () => {
     fireEvent.click(screen.getByTestId('send-queued-0'));
     await waitFor(() => expect(streamViaDaemon).toHaveBeenCalled());
 
-    expect(patchPreviewCommentStatus).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      previewComment.id,
-      'open',
-    );
+    expect(commentStatusWritten(null, null, previewComment.id, 'open')).toBe(false);
   });
 
   it('auto-starts queued sends one at a time after the active run completes', async () => {

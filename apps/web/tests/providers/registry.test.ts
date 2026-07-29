@@ -11,6 +11,7 @@ import {
   CLOUDFLARE_PAGES_PROVIDER_ID,
   connectConnector,
   DEFAULT_DEPLOY_PROVIDER_ID,
+  deletePreviewComment,
   deployProjectFile,
   fetchAgentsStream,
   fetchCloudflarePagesZones,
@@ -28,6 +29,7 @@ import {
   isDeployProviderId,
   openFolderDialog,
   patchPreviewCommentSortKey,
+  patchPreviewCommentStatus,
   updateDeployConfig,
   uploadProjectFiles,
   upsertPreviewComment,
@@ -1379,5 +1381,91 @@ describe('deploy provider registry helpers', () => {
       () => { throw new Error('expected deploy to reject'); },
       (err: unknown) => expect((err as { code?: string }).code).toBe('HTTP_404'),
     );
+  });
+});
+
+// Sibling omissions found while attributing the 401 on the Home send path.
+// `apps/daemon/src/routes/project/comments.ts` gates BOTH of these routes with
+// `enforceCommentWorkspaceMutation` (lines 240 and 345) — verified, unlike
+// `/anchor` and `/reorder`, which that file deliberately leaves ungated. Yet
+// these two callers sent no `x-od-workspace-*` at all while their neighbours
+// `upsertPreviewComment` and `patchPreviewCommentSortKey` did, so on a
+// workspace-bound project a member resolving or deleting a comment was judged
+// as a headerless caller and failed closed — silently, because both callers
+// collapse a non-ok response to `null` / `false`.
+describe('patchPreviewCommentStatus', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('attaches workspace identity headers when a workspace context is passed', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => previewCommentResponse({ status: 'resolved' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await patchPreviewCommentStatus(
+      'project-1',
+      'conv-1',
+      'cmt_1',
+      'resolved',
+      personalWorkspaceContext(),
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects/project-1/conversations/conv-1/comments/cmt_1',
+      expect.objectContaining({
+        method: 'PATCH',
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          'x-od-workspace-id': 'ws-personal',
+          'x-od-workspace-member-id': 'wm-1',
+        }),
+      }),
+    );
+  });
+
+  it('omits workspace headers when there is no workspace context (legacy local mode)', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => previewCommentResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    await patchPreviewCommentStatus('project-1', 'conv-1', 'cmt_1', 'open');
+
+    const [, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
+  });
+});
+
+describe('deletePreviewComment', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('attaches workspace identity headers when a workspace context is passed', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await deletePreviewComment('project-1', 'conv-1', 'cmt_1', personalWorkspaceContext());
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects/project-1/conversations/conv-1/comments/cmt_1',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: expect.objectContaining({
+          'x-od-workspace-id': 'ws-personal',
+          'x-od-workspace-member-id': 'wm-1',
+        }),
+      }),
+    );
+  });
+
+  it('omits workspace headers when there is no workspace context (legacy local mode)', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await deletePreviewComment('project-1', 'conv-1', 'cmt_1');
+
+    const [, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    expect(init.headers).toBeUndefined();
   });
 });
